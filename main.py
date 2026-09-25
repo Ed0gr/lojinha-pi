@@ -1,20 +1,29 @@
 import eventlet
 eventlet.monkey_patch()
+
 import os
 import sqlite3
 import time
 import select
 import threading
-from flask import Flask, render_template
+from functools import wraps
+from dotenv import load_dotenv
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_socketio import SocketIO
 from evdev import InputDevice, categorize, ecodes, list_devices
 from mfrc522 import SimpleMFRC522
 import RPi.GPIO as GPIO
 
+load_dotenv()
+
 DB_PATH = '/home/financeiro_avant/sistema_vendas/sistema_vendas.db'
 
 app = Flask(__name__)
+app.secret_key = os.getenv('SECRET_KEY', 'chave_secreta_totem_avant_2026')
 socketio = SocketIO(app, async_mode='eventlet')
+
+ADMIN_USER = os.getenv('ADMIN_USER', 'admin')
+ADMIN_PASS = os.getenv('ADMIN_PASS', 'admin123')
 
 GPIO.setwarnings(False)
 
@@ -48,8 +57,17 @@ scancodes = {
 estado_global = {
     'estado_atual': 'OCIOSO',
     'carrinho': [],
-    'subtotal': 0.0
+    'subtotal': 0.0,
+    'admin_ativo': False
 }
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 def buscar_produto(codigo):
     conn = sqlite3.connect(DB_PATH)
@@ -58,6 +76,14 @@ def buscar_produto(codigo):
     produto = cursor.fetchone()
     conn.close()
     return produto
+
+def buscar_membro(uid):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT nome, email FROM membros WHERE id_nfc = ?", (uid,))
+    membro = cursor.fetchone()
+    conn.close()
+    return membro
 
 def validar_membro(uid):
     conn = sqlite3.connect(DB_PATH)
@@ -85,16 +111,17 @@ def registrar_transacao(uid, itens, total):
     finally:
         conn.close()
 
-@app.route('/')
-def index():
-    global estado_global
-    # Renderiza o template correspondente ao estado atual do sistema
-    if estado_global['estado_atual'] == 'CARRINHO':
-        return render_template('carrinho.html', itens=estado_global['carrinho'], total=estado_global['subtotal'])
-    elif estado_global['estado_atual'] == 'SUCESSO':
-        return render_template('finalizado.html')
-    else:
-        return render_template('ocioso.html')
+# --- SOCKETIO EVENTS ---
+
+@socketio.on('entrar_admin')
+def ativar_modo_admin():
+    estado_global['admin_ativo'] = True
+    print("[SISTEMA] Painel Admin conectado. Totem de vendas PAUSADO.")
+
+@socketio.on('sair_admin')
+def desativar_modo_admin():
+    estado_global['admin_ativo'] = False
+    print("[SISTEMA] Painel Admin desconectado. Totem de vendas LIBERADO.")
 
 @socketio.on('remover_item')
 def remover_item_carrinho(dados):
@@ -117,21 +144,122 @@ def remover_item_carrinho(dados):
         
     socketio.emit('atualizacao_tela', estado_global)
 
+@socketio.on('desligar')
+def desligar_sistema():
+    print("Comando de desligamento recebido.")
+    os.system('sudo shutdown -h now')
+
+# --- ROTAS FLASK ---
+
+@app.route('/')
+def index():
+    global estado_global
+    if estado_global['estado_atual'] == 'CARRINHO':
+        return render_template('carrinho.html', itens=estado_global['carrinho'], total=estado_global['subtotal'])
+    elif estado_global['estado_atual'] == 'SUCESSO':
+        return render_template('finalizado.html')
+    else:
+        return render_template('ocioso.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    erro = None
+    if request.method == 'POST':
+        usuario = request.form.get('username')
+        senha = request.form.get('password')
+        if usuario == ADMIN_USER and senha == ADMIN_PASS:
+            session['logged_in'] = True
+            return redirect(url_for('admin_panel'))
+        else:
+            erro = 'Usuário ou senha incorretos.'
+    return render_template('login.html', erro=erro)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    estado_global['admin_ativo'] = False
+    return redirect(url_for('login'))
+
+@app.route('/admin')
+@login_required
+def admin_panel():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT codigo_barras, nome, preco FROM produtos")
+    produtos = cursor.fetchall()
+    cursor.execute("SELECT id_nfc, nome, email FROM membros")
+    membros = cursor.fetchall()
+    conn.close()
+    return render_template('admin.html', produtos=produtos, membros=membros)
+
+@app.route('/api/admin/produto', methods=['POST'])
+@login_required
+def cadastrar_produto_web():
+    data = request.get_json()
+    codigo = data.get('codigo')
+    nome = data.get('nome', '').strip()
+    try:
+        preco = float(str(data.get('preco')).replace(',', '.'))
+    except ValueError:
+        return jsonify({"status": "erro", "mensagem": "Preço inválido."}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO produtos (codigo_barras, nome, preco)
+            VALUES (?, ?, ?)
+            ON CONFLICT(codigo_barras) DO UPDATE SET
+                nome = CASE WHEN excluded.nome != '' THEN excluded.nome ELSE produtos.nome END,
+                preco = excluded.preco
+        """, (codigo, nome, preco))
+        conn.commit()
+        return jsonify({"status": "sucesso", "mensagem": "Produto salvo com sucesso!"})
+    except sqlite3.Error as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/admin/membro', methods=['POST'])
+@login_required
+def cadastrar_membro_web():
+    data = request.get_json()
+    uid = data.get('uid')
+    nome = data.get('nome', '').strip()
+    email = data.get('email', '').strip()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO membros (id_nfc, nome, email)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id_nfc) DO UPDATE SET
+                nome = CASE WHEN excluded.nome != '' THEN excluded.nome ELSE membros.nome END,
+                email = CASE WHEN excluded.email != '' THEN excluded.email ELSE membros.email END
+        """, (uid, nome, email))
+        conn.commit()
+        return jsonify({"status": "sucesso", "mensagem": "Membro salvo com sucesso!"})
+    except sqlite3.Error as e:
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+    finally:
+        conn.close()
+
+# --- THREADS DE HARDWARE ---
+
 def loop_leitor_barras():
     global estado_global
-    
     buffer_barras = ""
     ultimo_evento = time.time()
     TIMEOUT_SEGUNDOS = 60
-    
-    print("SISTEMA PRONTO. Aguardando interações de hardware.")
+
+    print("Thread do Leitor de Barras iniciada.")
 
     try:
         while True:
             tempo_atual = time.time()
             
-            if estado_global['estado_atual'] == 'CARRINHO' and (tempo_atual - ultimo_evento > TIMEOUT_SEGUNDOS):
-                print("TIMEOUT: Limpando carrinho.")
+            if not estado_global['admin_ativo'] and estado_global['estado_atual'] == 'CARRINHO' and (tempo_atual - ultimo_evento > TIMEOUT_SEGUNDOS):
                 estado_global['estado_atual'] = 'OCIOSO'
                 estado_global['carrinho'].clear()
                 estado_global['subtotal'] = 0.0
@@ -157,67 +285,80 @@ def loop_leitor_barras():
 
                 for codigo in codigos_lidos:
                     produto_db = buscar_produto(codigo)
-                    
-                    if produto_db:
-                        nome, preco = produto_db
-                        estado_global['subtotal'] += preco
-                        estado_global['estado_atual'] = 'CARRINHO'
-                        
-                        encontrado = False
-                        for item in estado_global['carrinho']:
-                            if item['codigo'] == codigo:
-                                item['quantidade'] += 1
-                                item['preco_total'] += preco
-                                encontrado = True
-                                break
-                        
-                        if not encontrado:
-                            estado_global['carrinho'].append({
-                                'codigo': codigo, 
-                                'nome': nome, 
-                                'preco_unitario': preco,
-                                'quantidade': 1,
-                                'preco_total': preco
-                            })
-                        
-                        print(f"CARRINHO ATUALIZADO: R$ {estado_global['subtotal']:.2f}")
-                        socketio.emit('atualizacao_tela', estado_global)
+
+                    if estado_global['admin_ativo']:
+                        payload = {'codigo': codigo, 'nome': '', 'preco': ''}
+                        if produto_db:
+                            payload['nome'] = produto_db[0]
+                            payload['preco'] = produto_db[1]
+                        socketio.emit('codigo_escaneado', payload)
+                        print(f"[ADMIN] Código escaneado: {codigo}")
                     else:
-                        print(f"PRODUTO DESCONHECIDO: {codigo}")
+                        if produto_db:
+                            nome, preco = produto_db
+                            estado_global['subtotal'] += preco
+                            estado_global['estado_atual'] = 'CARRINHO'
+                            
+                            encontrado = False
+                            for item in estado_global['carrinho']:
+                                if item['codigo'] == codigo:
+                                    item['quantidade'] += 1
+                                    item['preco_total'] += preco
+                                    encontrado = True
+                                    break
+                            
+                            if not encontrado:
+                                estado_global['carrinho'].append({
+                                    'codigo': codigo, 
+                                    'nome': nome, 
+                                    'preco_unitario': preco,
+                                    'quantidade': 1,
+                                    'preco_total': preco
+                                })
+                            
+                            socketio.emit('atualizacao_tela', estado_global)
+                        else:
+                            print(f"PRODUTO DESCONHECIDO: {codigo}")
                     
                     ultimo_evento = tempo_atual
 
             eventlet.sleep(0.01)
-
     except KeyboardInterrupt:
         pass
 
 def loop_leitor_nfc():
     global estado_global
-    try:
-        while True:
-            if estado_global['estado_atual'] == 'CARRINHO':
-                uid, texto = leitor_nfc.read_no_block()
-                
-                if uid is not None:
-                    uid_str = str(uid)
+    print("Thread do Leitor NFC iniciada.")
+    while True:
+        try:
+            uid, texto = leitor_nfc.read_no_block()
+            
+            if uid is not None:
+                uid_str = str(uid)
+                print(f"[DEBUG NFC] Cartão detectado: {uid_str}")
+
+                if estado_global['admin_ativo']:
+                    membro_db = buscar_membro(uid_str)
+                    payload = {'uid': uid_str, 'nome': '', 'email': ''}
+                    if membro_db:
+                        payload['nome'] = membro_db[0]
+                        payload['email'] = membro_db[1] if membro_db[1] else ''
+                    socketio.emit('nfc_escaneado', payload)
+                    eventlet.sleep(1)
+                elif estado_global['estado_atual'] == 'CARRINHO':
                     membro = validar_membro(uid_str)
-                    
                     if membro:
                         nome_membro = membro[0]
-                        print(f"COMPRA AUTORIZADA: {nome_membro}")
-                        
                         lista_codigos = []
                         for item in estado_global['carrinho']:
                             for _ in range(item['quantidade']):
                                 lista_codigos.append(item['codigo'])
                                 
                         registrar_transacao(uid_str, lista_codigos, estado_global['subtotal'])
-                        
                         estado_global['estado_atual'] = 'SUCESSO'
                         socketio.emit('atualizacao_tela', estado_global)
                         
-                        time.sleep(6)
+                        eventlet.sleep(6)
                         
                         estado_global['estado_atual'] = 'OCIOSO'
                         estado_global['carrinho'].clear()
@@ -225,18 +366,13 @@ def loop_leitor_nfc():
                         socketio.emit('atualizacao_tela', estado_global)
                     else:
                         print("CARTÃO NÃO CADASTRADO NO BANCO DE DADOS.")
-            
-            eventlet.sleep(0.5)
-    except KeyboardInterrupt:
-        pass
+                        eventlet.sleep(2)
+        except Exception as e:
+            print(f"[ERRO NFC] Falha na leitura: {e}")
 
-@socketio.on('desligar')
-def desligar_sistema():
-    print("Comando de desligamento recebido.")
-    os.system('sudo shutdown -h now')
+        eventlet.sleep(0.5)
 
 if __name__ == '__main__':
-    # Inicializa as duas threads de hardware de forma independente
     thread_barras = threading.Thread(target=loop_leitor_barras, daemon=True)
     thread_barras.start()
     

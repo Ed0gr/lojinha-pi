@@ -16,3 +16,4 @@ logs/
 # Configuracoes de ambiente local
 .vscode/
 .idea/
+*.csv
