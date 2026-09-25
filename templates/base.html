@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Lojinha AVANT</title>
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        body {
+            width: 800px; 
+            height: 480px;
+            background-color: #003F41; 
+            color: #FFFFFF;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden; 
+            position: relative;
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+        }
+        .logo { 
+            position: absolute; 
+            top: 40px; 
+            left: 40px; 
+            height: 50px;
+            width: auto;
+            z-index: 2; 
+        }
+        .drone { 
+            position: absolute; 
+            bottom: -20px; 
+            right: -30px; 
+            height: 330px; 
+            opacity: 0.15; 
+            z-index: 1; 
+            pointer-events: none; 
+        }
+        .texto-container { 
+            width: 100%;
+            text-align: center; 
+            z-index: 3; 
+            transform: translateY(-20px);
+        }
+        .titulo { 
+            font-size: 60px; 
+            font-weight: 900; 
+            letter-spacing: -1px; 
+            margin-bottom: 5px; 
+        }
+        .subtitulo { 
+            font-size: 18px; 
+            font-weight: 600; 
+            letter-spacing: 0.5px; 
+        }
+    </style>
+</head>
+<body>
+    <img src="{{ url_for('static', filename='logo.png') }}" class="logo">
+    <button onclick="desligar()" style="position: absolute; top: 25px; right: 40px; background: transparent; border: none; color: rgba(255,255,255,0.5); font-size: 30px; z-index: 9999; cursor: pointer; line-height: 1;">⏻</button>
+
+<script>
+    function desligar() {
+        if (confirm("Tem certeza que deseja desligar o sistema?")) {
+            socket.emit('desligar');
+        }
+    }
+</script>
+    <img src="{{ url_for('static', filename='drone.png') }}" class="drone">
+
+    {% block conteudo %}{% endblock %}
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+
+        socket.on('atualizacao_tela', function(dados) {
+            location.reload();
+        });
+
+        function removerItem(codigo) {
+            socket.emit('remover_item', { codigo: codigo });
+        }
+    </script>
+</body>
+</html>

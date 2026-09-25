@@ -1,0 +1,18 @@
+# Arquivo de credenciais reais
+.env
+
+# Banco de dados com dados dos membros e transacoes
+*.db
+*.sqlite3
+
+# Arquivos temporarios e cache do Python
+__pycache__/
+*.pyc
+
+# Logs do sistema
+*.log
+logs/
+
+# Configuracoes de ambiente local
+.vscode/
+.idea/

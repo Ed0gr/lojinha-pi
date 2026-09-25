@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block conteudo %}
+    <style>
+        .layout-carrinho {
+            display: flex;
+            width: 100%;
+            height: 100%;
+            padding: 25px 40px;
+            gap: 30px;
+            z-index: 3;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo-cantos {
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            height: 50px;
+            width: auto;
+            z-index: 4;
+        }
+
+        .painel-esquerdo {
+            background-color: #006964;
+            border-radius: 20px;
+            width: 440px;
+            height: 360px;
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            margin-top: 40px;
+        }
+
+        .painel-esquerdo h2 {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            color: #FFFFFF;
+        }
+
+        .divisor {
+            height: 2px;
+            background-color: #FFFFFF;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        .lista-itens {
+            flex-grow: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding-right: 5px;
+        }
+
+        .item-card {
+            background-color: #648B79;
+            border-radius: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
+            color: #FFFFFF;
+        }
+
+        .item-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .btn-remover {
+            background-color: #D32F2F;
+            border: none;
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preco-item {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        /* PAINEL DIREITO AJUSTADO */
+        .painel-direito {
+            background-color: #006964;
+            border-radius: 20px;
+            width: 240px;
+            height: 360px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start; /* Mudado para flex-start */
+            gap: 20px; /* Espaçamento entre os blocos */
+            align-items: center;
+            margin-top: 40px;
+        }
+
+        .card-total {
+            background-color: #648B79;
+            border-radius: 15px;
+            width: 100%;
+            padding: 45px 10px; /* Aumentado verticalmente */
+            text-align: center;
+        }
+
+        .card-total .titulo-total {
+            font-size: 22px;
+            font-weight: bold;
+            color: #D32F2F;
+            margin-bottom: 8px;
+        }
+
+        .card-total .valor-total {
+            font-size: 32px; /* Fonte levemente maior */
+            font-weight: bold;
+            color: #D32F2F;
+        }
+
+        .aviso-nfc {
+            border: 2px dashed #FFA726;
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: bold;
+            color: #FFA726;
+            width: 100%;
+        }
+    </style>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            let logoPadrao = document.querySelector('.logo');
+            if (logoPadrao) logoPadrao.style.display = 'none';
+        });
+    </script>
+    <img src="{{ url_for('static', filename='logo.png') }}" class="logo-cantos">
+
+    <div class="layout-carrinho">
+        <div class="painel-esquerdo">
+            <h2>Itens no Carrinho</h2>
+            <div class="divisor"></div>
+            
+            <div class="lista-itens">
+                {% for item in itens %}
+                <div class="item-card">
+                    <div class="item-info">
+                        <button class="btn-remover" onclick="removerItem('{{ item.codigo }}')">-</button>
+                        <span>{{ item.quantidade }}x {{ item.nome }}</span>
+                    </div>
+                    <div class="preco-item">R$ {{ "%.2f"|format(item.preco_total)|replace('.', ',') }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="painel-direito">
+            <div class="card-total">
+                <div class="titulo-total">TOTAL</div>
+                <div class="valor-total">R$ {{ "%.2f"|format(total)|replace('.', ',') }}</div>
+            </div>
+
+            <div class="aviso-nfc">
+                Aproxime a carteirinha de estudante para realizar o pagamento.
+            </div>
+        </div>
+    </div>
+{% endblock %}
